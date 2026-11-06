@@ -143,8 +143,15 @@ document.addEventListener('DOMContentLoaded', function () {
 		const codeEditor = snippet.querySelector('[data-wa-code-editor]');
 		const codeInput = codeEditor && codeEditor.querySelector('[data-wa-code-input]');
 		const removeButton = snippet.querySelector('[data-wa-snippet-remove]');
+		const duplicateButton = snippet.querySelector('.wa-code-snippet__duplicate');
 		const urlFields = snippet.querySelector('[data-wa-url-fields]');
 		const addUrlButton = snippet.querySelector('[data-wa-url-add]');
+
+		if (duplicateButton) {
+			duplicateButton.addEventListener('click', function (event) {
+				event.stopPropagation();
+			});
+		}
 
 		[language, location, titleInput, shortcodeOnly].forEach(function (control) {
 			if (control) {

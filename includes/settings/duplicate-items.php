@@ -93,7 +93,7 @@ class WA_Suit_Setting_Duplicate_Items {
 				<input type="checkbox" name="settings[duplicate_enabled]" value="1" <?php checked( $settings['duplicate_enabled'] ); ?>>
 				<span>
 					<strong><?php echo esc_html__( 'Ativar duplicação', 'wa-suit' ); ?></strong>
-					<small><?php echo esc_html__( 'Ativado por padrão. As cópias são criadas como rascunho e preservam os dados e estilos do Elementor.', 'wa-suit' ); ?></small>
+					<small><?php echo esc_html__( 'Ativado por padrão. As cópias são criadas como rascunho, preservam os dados e estilos do Elementor e registram quem fez a cópia.', 'wa-suit' ); ?></small>
 				</span>
 			</label>
 

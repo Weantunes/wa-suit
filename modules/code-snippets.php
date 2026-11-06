@@ -72,6 +72,7 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 	public function __construct()
 	{
 		add_action('admin_post_wa_suit_save_code_snippets', array($this, 'save_snippets'));
+		add_action('admin_post_wa_suit_duplicate_code_snippet', array($this, 'duplicate_snippet'));
 		add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_assets'));
 		add_action('wp_ajax_wa_suit_toggle_code_snippet', array($this, 'ajax_toggle_snippet'));
 	}
@@ -267,6 +268,77 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 	}
 
 	/**
+	 * Creates a disabled copy of a saved snippet.
+	 *
+	 * @return void
+	 */
+	public function duplicate_snippet()
+	{
+		if (! WA_Suit_Security::can_manage_settings()) {
+			wp_die(esc_html__('Você não tem permissão para duplicar estes códigos.', 'wa-suit'), '', array('response' => 403));
+		}
+
+		$snippet_id = isset($_GET['snippet_id']) && is_string($_GET['snippet_id'])
+			? sanitize_key(wp_unslash($_GET['snippet_id']))
+			: '';
+		check_admin_referer('wa_suit_duplicate_code_snippet_' . $snippet_id);
+
+		$settings = $this->get_settings();
+		$snippets = isset($settings['snippets']) && is_array($settings['snippets']) ? $settings['snippets'] : array();
+		if ('' === $snippet_id || ! isset($snippets[$snippet_id]) || ! is_array($snippets[$snippet_id])) {
+			wp_die(esc_html__('O código selecionado não foi encontrado.', 'wa-suit'), '', array('response' => 404));
+		}
+
+		$source      = $snippets[$snippet_id];
+		$source_title = isset($source['title']) && is_string($source['title']) ? $source['title'] : '';
+		$base_title  = preg_replace('/\s*\(c[oó]pia(?:\s+\d+)?\)$/iu', '', $source_title);
+		$base_title  = is_string($base_title) && '' !== trim($base_title) ? trim($base_title) : $source_title;
+		$copy_number = 0;
+
+		foreach ($snippets as $existing_snippet) {
+			if (! is_array($existing_snippet) || empty($existing_snippet['title']) || ! is_string($existing_snippet['title'])) {
+				continue;
+			}
+
+			$existing_title = $existing_snippet['title'];
+			if (! preg_match('/^(.*?)\s*\(c[oó]pia(?:\s+(\d+))?\)$/iu', $existing_title, $matches)) {
+				continue;
+			}
+
+			if (sanitize_title($matches[1]) !== sanitize_title($base_title)) {
+				continue;
+			}
+
+			$copy_number = max($copy_number, ! empty($matches[2]) ? absint($matches[2]) : 1);
+		}
+
+		$copy_number++;
+		$copy = $source;
+		$copy['title']   = sprintf(__('%1$s (cópia %2$d)', 'wa-suit'), $base_title, $copy_number);
+		$copy['enabled'] = '0';
+		$new_id = wp_generate_uuid4();
+
+		$snippets[$new_id] = $copy;
+		$this->update_settings(array('snippets' => $snippets));
+		$saved_settings = $this->get_settings();
+		$saved_snippets = isset($saved_settings['snippets']) && is_array($saved_settings['snippets']) ? $saved_settings['snippets'] : array();
+		if (! isset($saved_snippets[$new_id]['enabled']) || '0' !== (string) $saved_snippets[$new_id]['enabled']) {
+			wp_die(esc_html__('Não foi possível salvar a cópia do código.', 'wa-suit'), '', array('response' => 500));
+		}
+
+		$redirect_url = add_query_arg(
+			array(
+				'page'              => 'wa-suit',
+				'tab'               => $this->get_id(),
+				'snippet-duplicated' => '1',
+			),
+			admin_url('admin.php')
+		);
+		wp_safe_redirect($redirect_url);
+		exit;
+	}
+
+	/**
 	 * Renders the snippets editor.
 	 *
 	 * @return void
@@ -294,6 +366,11 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 			<?php if (isset($_GET['snippets-saved']) && is_string($_GET['snippets-saved']) && '1' === sanitize_text_field(wp_unslash($_GET['snippets-saved']))) : ?>
 				<div class="notice notice-success inline">
 					<p><?php echo esc_html__('Códigos salvos.', 'wa-suit'); ?></p>
+				</div>
+			<?php endif; ?>
+			<?php if (isset($_GET['snippet-duplicated']) && is_string($_GET['snippet-duplicated']) && '1' === sanitize_text_field(wp_unslash($_GET['snippet-duplicated']))) : ?>
+				<div class="notice notice-success inline">
+					<p><?php echo esc_html__('Cópia criada desativada. Revise o código e ative quando estiver pronto.', 'wa-suit'); ?></p>
 				</div>
 			<?php endif; ?>
 
@@ -773,11 +850,29 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 			$snippet['devices'] = array('all');
 		}
 		$prefix  = 'snippets[' . $key . ']';
+		$duplicate_url = '__SNIPPET_KEY__' !== $key
+			? wp_nonce_url(
+				add_query_arg(
+					array(
+						'action'     => 'wa_suit_duplicate_code_snippet',
+						'snippet_id' => $key,
+					),
+					admin_url('admin-post.php')
+				),
+				'wa_suit_duplicate_code_snippet_' . $key
+			)
+			: '';
 	?>
 		<details class="wa-code-snippet" data-wa-snippet>
 			<summary class="wa-code-snippet__summary">
 				<strong data-wa-snippet-title><?php echo esc_html('' !== $snippet['title'] ? $snippet['title'] : __('Novo código', 'wa-suit')); ?></strong>
 				<span data-wa-snippet-summary><?php echo esc_html($this->snippet_summary($snippet)); ?></span>
+				<?php if ('' !== $duplicate_url) : ?>
+					<a class="wa-code-snippet__duplicate" href="<?php echo esc_url($duplicate_url); ?>">
+						<span class="dashicons dashicons-admin-page" aria-hidden="true"></span>
+						<?php echo esc_html__('Duplicar', 'wa-suit'); ?>
+					</a>
+				<?php endif; ?>
 				<span class="wa-code-snippet__switch-wrap" data-wa-snippet-switch-wrap>
 					<input type="hidden" name="<?php echo esc_attr($prefix); ?>[enabled]" value="0">
 					<input class="wa-code-snippet__switch" type="checkbox" name="<?php echo esc_attr($prefix); ?>[enabled]" value="1" data-wa-snippet-enabled data-snippet-id="<?php echo esc_attr($key); ?>" data-snippet-persisted="<?php echo esc_attr('__SNIPPET_KEY__' === $key ? '0' : '1'); ?>" aria-label="<?php echo esc_attr(sprintf(__('Ativar %s', 'wa-suit'), $snippet['title'])); ?>" <?php checked('1', (string) $snippet['enabled']); ?>>

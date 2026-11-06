@@ -110,6 +110,18 @@
 		}
 	}
 
+	function syncPhoneCountrySelectorColor( input ) {
+		var container = input.closest( '.iti' );
+		if ( ! container ) {
+			return;
+		}
+
+		container.style.setProperty(
+			'--wa-suit-phone-input-color',
+			window.getComputedStyle( input ).color
+		);
+	}
+
 	function initializePhoneMask( input ) {
 		if ( input.dataset.waMaskInitialized ) {
 			return;
@@ -171,7 +183,17 @@
 
 		var iti = window.intlTelInput( input, phoneOptions );
 
+		syncPhoneCountrySelectorColor( input );
+		input.addEventListener( 'focus', function () {
+			syncPhoneCountrySelectorColor( input );
+		} );
+		window.addEventListener( 'resize', function () {
+			syncPhoneCountrySelectorColor( input );
+		} );
+
 		input.addEventListener( 'countrychange', function () {
+			syncPhoneCountrySelectorColor( input );
+
 			if ( ! iti || 'function' !== typeof iti.getNumber || 'function' !== typeof iti.setNumber ) {
 				return;
 			}

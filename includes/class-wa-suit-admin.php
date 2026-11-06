@@ -349,14 +349,16 @@ public function render_settings_menu_page() {
 			return $actions;
 		}
 
+		$duplicate_token = str_replace( '-', '', wp_generate_uuid4() );
 		$url = add_query_arg(
 			array(
-				'action' => 'wa_suit_duplicate_post',
-				'post'   => $post->ID,
+				'action'          => 'wa_suit_duplicate_post',
+				'post'            => $post->ID,
+				'duplicate_token' => $duplicate_token,
 			),
 			admin_url( 'admin.php' )
 		);
-		$url = wp_nonce_url( $url, 'wa_suit_duplicate_post_' . $post->ID );
+		$url = wp_nonce_url( $url, 'wa_suit_duplicate_post_' . $post->ID . '_' . $duplicate_token );
 		$actions['wa_suit_duplicate'] = '<a href="' . esc_url( $url ) . '">' . esc_html__( 'Duplicar', 'wa-suit' ) . '</a>';
 
 		return $actions;
@@ -368,8 +370,14 @@ public function render_settings_menu_page() {
 	 * @return void
 	 */
 	public function duplicate_post() {
-		$post_id = isset( $_GET['post'] ) ? absint( $_GET['post'] ) : 0;
-		check_admin_referer( 'wa_suit_duplicate_post_' . $post_id );
+		$post_id        = isset( $_GET['post'] ) ? absint( $_GET['post'] ) : 0;
+		$duplicate_token = isset( $_GET['duplicate_token'] ) && is_string( $_GET['duplicate_token'] )
+			? sanitize_text_field( wp_unslash( $_GET['duplicate_token'] ) )
+			: '';
+		if ( ! preg_match( '/^[a-f0-9]{32}$/', $duplicate_token ) ) {
+			wp_die( esc_html__( 'O link de duplicação é inválido. Atualize a lista e tente novamente.', 'wa-suit' ), '', array( 'response' => 400 ) );
+		}
+		check_admin_referer( 'wa_suit_duplicate_post_' . $post_id . '_' . $duplicate_token );
 
 		$source   = get_post( $post_id );
 		$settings = $this->settings->get_general_settings();
@@ -377,43 +385,140 @@ public function render_settings_menu_page() {
 			wp_die( esc_html__( 'Este conteúdo não pode ser duplicado com suas permissões atuais.', 'wa-suit' ), '', array( 'response' => 403 ) );
 		}
 
-		$duplicate_id = wp_insert_post(
+		$previous_copy = get_posts(
 			array(
-				'post_type'      => $source->post_type,
-				'post_status'    => 'draft',
-				'post_title'     => sprintf( __( '%s (cópia)', 'wa-suit' ), $source->post_title ),
-				'post_content'   => $source->post_content,
-				'post_excerpt'   => $source->post_excerpt,
-				'post_author'    => get_current_user_id(),
-				'post_parent'    => $source->post_parent,
-				'menu_order'     => $source->menu_order,
-				'comment_status' => $source->comment_status,
-				'ping_status'    => $source->ping_status,
+				'post_type'              => $source->post_type,
+				'post_status'            => 'any',
+				'posts_per_page'         => 1,
+				'fields'                 => 'ids',
+				'meta_key'               => '_wa_suit_duplicate_request',
+				'meta_value'             => $duplicate_token,
+				'suppress_filters'       => true,
+				'update_post_meta_cache' => false,
+				'update_post_term_cache' => false,
+			)
+		);
+		if ( ! empty( $previous_copy[0] ) && (int) get_post_meta( $previous_copy[0], '_wa_suit_duplicated_from', true ) === $post_id ) {
+			wp_safe_redirect( admin_url( 'post.php?post=' . absint( $previous_copy[0] ) . '&action=edit' ) );
+			exit;
+		}
+
+		$duplicate_lock = 'wa_suit_duplicate_lock_' . hash( 'sha256', $duplicate_token );
+		$lock_data      = array(
+			'post_id'    => $post_id,
+			'user_id'    => get_current_user_id(),
+			'created_at' => time(),
+		);
+		if ( ! add_option( $duplicate_lock, $lock_data, '', false ) ) {
+			$existing_lock = get_option( $duplicate_lock );
+			if ( is_array( $existing_lock ) && isset( $existing_lock['created_at'] ) && time() - absint( $existing_lock['created_at'] ) > 600 ) {
+				delete_option( $duplicate_lock );
+			}
+
+			if ( ! add_option( $duplicate_lock, $lock_data, '', false ) ) {
+				$previous_copy = get_posts(
+					array(
+						'post_type'              => $source->post_type,
+						'post_status'            => 'any',
+						'posts_per_page'         => 1,
+						'fields'                 => 'ids',
+						'meta_key'               => '_wa_suit_duplicate_request',
+						'meta_value'             => $duplicate_token,
+						'suppress_filters'       => true,
+						'update_post_meta_cache' => false,
+						'update_post_term_cache' => false,
+					)
+				);
+				if ( ! empty( $previous_copy[0] ) && (int) get_post_meta( $previous_copy[0], '_wa_suit_duplicated_from', true ) === $post_id ) {
+					wp_safe_redirect( admin_url( 'post.php?post=' . absint( $previous_copy[0] ) . '&action=edit' ) );
+					exit;
+				}
+
+				wp_die( esc_html__( 'Esta duplicação já está sendo processada. Aguarde alguns instantes e tente novamente.', 'wa-suit' ), '', array( 'response' => 409 ) );
+			}
+		}
+
+		$fail_duplicate = function ( $message, $response = 500, $failed_duplicate_id = 0 ) use ( $duplicate_lock ) {
+			if ( $failed_duplicate_id ) {
+				wp_delete_post( $failed_duplicate_id, true );
+			}
+			delete_option( $duplicate_lock );
+			wp_die( esc_html( $message ), '', array( 'response' => $response ) );
+		};
+
+		$existing_duplicates = get_posts(
+			array(
+				'post_type'              => $source->post_type,
+				'post_status'            => 'any',
+				'posts_per_page'         => -1,
+				'fields'                 => 'ids',
+				'meta_key'               => '_wa_suit_duplicated_from',
+				'meta_value'             => $post_id,
+				'suppress_filters'       => true,
+				'update_post_meta_cache' => false,
+				'update_post_term_cache' => false,
+			)
+		);
+		$copy_number = count( $existing_duplicates ) + 1;
+		$copy_title  = sprintf( __( '%1$s (cópia %2$d)', 'wa-suit' ), $source->post_title, $copy_number );
+		$copy_slug   = sanitize_title( $source->post_name . '-copia-' . $copy_number );
+		$duplicate_id = wp_insert_post(
+			wp_slash(
+				array(
+					'post_type'      => $source->post_type,
+					'post_status'    => 'draft',
+					'post_title'     => $copy_title,
+					'post_name'      => $copy_slug,
+					'post_content'   => $source->post_content,
+					'post_excerpt'   => $source->post_excerpt,
+					'post_author'    => get_current_user_id(),
+					'post_parent'    => $source->post_parent,
+					'menu_order'     => $source->menu_order,
+					'comment_status' => $source->comment_status,
+					'ping_status'    => $source->ping_status,
+				)
 			),
 			true
 		);
 
-		if ( is_wp_error( $duplicate_id ) ) {
-			wp_die( esc_html( $duplicate_id->get_error_message() ), '', array( 'response' => 500 ) );
+		if ( is_wp_error( $duplicate_id ) || ! $duplicate_id ) {
+			$error_message = is_wp_error( $duplicate_id ) ? $duplicate_id->get_error_message() : __( 'Não foi possível criar a cópia do conteúdo.', 'wa-suit' );
+			$fail_duplicate( $error_message );
+		}
+
+		update_post_meta( $duplicate_id, '_wa_suit_duplicate_request', $duplicate_token );
+		if ( $duplicate_token !== get_post_meta( $duplicate_id, '_wa_suit_duplicate_request', true ) ) {
+			$fail_duplicate( __( 'Não foi possível proteger a solicitação de duplicação contra cliques repetidos.', 'wa-suit' ), 500, $duplicate_id );
 		}
 
 		foreach ( get_object_taxonomies( $source->post_type ) as $taxonomy ) {
 			$term_ids = wp_get_object_terms( $post_id, $taxonomy, array( 'fields' => 'ids' ) );
 			if ( is_wp_error( $term_ids ) ) {
-				wp_delete_post( $duplicate_id, true );
-				wp_die( esc_html( $term_ids->get_error_message() ), '', array( 'response' => 500 ) );
+				$fail_duplicate( $term_ids->get_error_message(), 500, $duplicate_id );
 			}
 
 			$assigned = wp_set_object_terms( $duplicate_id, $term_ids, $taxonomy );
 			if ( is_wp_error( $assigned ) ) {
-				wp_delete_post( $duplicate_id, true );
-				wp_die( esc_html( $assigned->get_error_message() ), '', array( 'response' => 500 ) );
+				$fail_duplicate( $assigned->get_error_message(), 500, $duplicate_id );
 			}
+		}
+
+		$elementor_db = null;
+		if (
+			class_exists( '\Elementor\Plugin' )
+			&& isset( \Elementor\Plugin::$instance->db )
+			&& method_exists( \Elementor\Plugin::$instance->db, 'copy_elementor_meta' )
+		) {
+			$elementor_db = \Elementor\Plugin::$instance->db;
 		}
 
 		$meta = get_post_meta( $post_id );
 		foreach ( $meta as $meta_key => $values ) {
-			if ( in_array( $meta_key, array( '_edit_lock', '_edit_last', '_elementor_css' ), true ) ) {
+			$is_elementor_meta = 0 === strpos( $meta_key, '_elementor' );
+			if (
+				in_array( $meta_key, array( '_edit_lock', '_edit_last', '_elementor_css', '_wa_suit_duplicated_by', '_wa_suit_duplicated_from', '_wa_suit_duplicate_number', '_wa_suit_duplicate_request' ), true )
+				|| ( $elementor_db && ( $is_elementor_meta || in_array( $meta_key, array( '_thumbnail_id', '_wp_page_template' ), true ) ) )
+			) {
 				continue;
 			}
 
@@ -423,10 +528,67 @@ public function render_settings_menu_page() {
 				}
 
 				if ( ! add_post_meta( $duplicate_id, $meta_key, wp_slash( $value ) ) ) {
-					wp_delete_post( $duplicate_id, true );
-					wp_die( esc_html__( 'Não foi possível copiar os metadados do conteúdo.', 'wa-suit' ), '', array( 'response' => 500 ) );
+					$fail_duplicate( __( 'Não foi possível copiar os metadados do conteúdo.', 'wa-suit' ), 500, $duplicate_id );
 				}
 			}
+		}
+
+		if ( $elementor_db ) {
+			try {
+				$elementor_db->copy_elementor_meta( $post_id, $duplicate_id );
+			} catch ( \Throwable $error ) {
+				error_log(
+					sprintf(
+						'WA Suit: Elementor metadata copy failed for duplicate post %d: %s',
+						$duplicate_id,
+						$error->getMessage()
+					)
+				);
+				$fail_duplicate( __( 'Não foi possível copiar os dados do Elementor. Consulte o log de erros do servidor.', 'wa-suit' ), 500, $duplicate_id );
+			}
+
+			foreach ( array( '_elementor_data', '_elementor_page_settings', '_thumbnail_id', '_wp_page_template' ) as $meta_key ) {
+				if ( ! isset( $meta[ $meta_key ][0] ) ) {
+					continue;
+				}
+
+				$source_value = maybe_unserialize( $meta[ $meta_key ][0] );
+				$copied_value = get_post_meta( $duplicate_id, $meta_key, true );
+				if ( '_elementor_data' === $meta_key && is_string( $source_value ) && is_string( $copied_value ) ) {
+					$source_json = json_decode( $source_value, true );
+					$source_json_valid = JSON_ERROR_NONE === json_last_error() && is_array( $source_json );
+					$copied_json = json_decode( $copied_value, true );
+					$copied_json_valid = JSON_ERROR_NONE === json_last_error() && is_array( $copied_json );
+					if ( $source_json_valid ) {
+						$source_value = $source_json;
+					}
+					if ( $copied_json_valid ) {
+						$copied_value = $copied_json;
+					}
+				}
+
+				if ( ! metadata_exists( 'post', $duplicate_id, $meta_key ) || ! $this->duplicate_meta_values_match( $source_value, $copied_value ) ) {
+					error_log(
+						sprintf(
+							'WA Suit: Elementor metadata verification failed for duplicate post %d (meta key %s).',
+							$duplicate_id,
+							$meta_key
+						)
+					);
+					$fail_duplicate( __( 'Os dados do Elementor ou as imagens não foram copiados corretamente. A cópia incompleta foi removida; consulte o log de erros do servidor.', 'wa-suit' ), 500, $duplicate_id );
+				}
+			}
+		}
+
+		update_post_meta( $duplicate_id, '_wa_suit_duplicated_by', get_current_user_id() );
+		update_post_meta( $duplicate_id, '_wa_suit_duplicated_from', $post_id );
+		update_post_meta( $duplicate_id, '_wa_suit_duplicate_number', $copy_number );
+		if (
+			(int) get_post_meta( $duplicate_id, '_wa_suit_duplicated_by', true ) !== get_current_user_id()
+			|| (int) get_post_meta( $duplicate_id, '_wa_suit_duplicated_from', true ) !== $post_id
+			|| (int) get_post_meta( $duplicate_id, '_wa_suit_duplicate_number', true ) !== $copy_number
+		) {
+			$fail_duplicate( __( 'Não foi possível registrar quem criou a cópia.', 'wa-suit' ), 500, $duplicate_id );
 		}
 
 		$elementor_css_error = false;
@@ -455,8 +617,43 @@ public function render_settings_menu_page() {
 			$redirect_url = add_query_arg( 'wa_suit_elementor_css_error', '1', $redirect_url );
 		}
 
+		delete_option( $duplicate_lock );
 		wp_safe_redirect( $redirect_url );
 		exit;
+	}
+
+	/**
+	 * Compares post meta values while ignoring associative-array key order.
+	 *
+	 * @param mixed $source_value Original value.
+	 * @param mixed $copied_value Copied value.
+	 * @return bool
+	 */
+	private function duplicate_meta_values_match( $source_value, $copied_value ) {
+		if ( is_array( $source_value ) && is_array( $copied_value ) ) {
+			if ( array_keys( $source_value ) !== array_keys( $copied_value ) ) {
+				ksort( $source_value );
+				ksort( $copied_value );
+			}
+
+			if ( array_keys( $source_value ) !== array_keys( $copied_value ) ) {
+				return false;
+			}
+
+			foreach ( $source_value as $key => $value ) {
+				if ( ! $this->duplicate_meta_values_match( $value, $copied_value[ $key ] ) ) {
+					return false;
+				}
+			}
+
+			return true;
+		}
+
+		if ( is_numeric( $source_value ) && is_numeric( $copied_value ) ) {
+			return (string) $source_value === (string) $copied_value;
+		}
+
+		return $source_value === $copied_value;
 	}
 
 	/**

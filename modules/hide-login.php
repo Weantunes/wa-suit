@@ -15,7 +15,8 @@
  * Recursos:
  * - URL de login personalizada.
  * - Bloqueio de wp-login.php para visitantes não autenticados.
- * - Redirecionamento para a página inicial.
+ * - Redirecionamento de wp-login.php para a página inicial.
+ * - Redirecionamento do painel para /404 para visitantes não autenticados.
  * - Preservação de AJAX e operações administrativas legítimas.
  * - Compatibilidade com recuperação de senha e logout.
  * - Configuração protegida por capability e nonce.
@@ -38,7 +39,8 @@ if (! class_exists('WA_Suit_Module_Hide_Login')) {
 
         const OPTION_SETTINGS = 'wa_suit_hide_login_settings';
         const QUERY_VAR       = 'wa_suit_hide_login';
-        const DEFAULT_SLUG     = 'acesso-wa-7x9k';
+        const DEFAULT_SLUG        = 'wa-portal';
+        const LEGACY_DEFAULT_SLUG = 'acesso-wa-7x9k';
 
         /**
          * Evita processamento duplicado da rota personalizada.
@@ -105,6 +107,19 @@ if (! class_exists('WA_Suit_Module_Hide_Login')) {
                 'init',
                 array($this, 'register_rewrite_rules'),
                 1
+            );
+
+            add_action(
+                'init',
+                array($this, 'migrate_legacy_default_slug'),
+                0
+            );
+
+            // Impede que o acesso ao painel revele a rota de login.
+            add_action(
+                'init',
+                array($this, 'redirect_unauthenticated_admin'),
+                0
             );
 
             // Registra a variável interna da rota.
@@ -317,6 +332,44 @@ if (! class_exists('WA_Suit_Module_Hide_Login')) {
         }
 
         /**
+         * Atualiza a rota padrão anterior e suas regras salvas.
+         *
+         * @return void
+         */
+        public function migrate_legacy_default_slug()
+        {
+
+            $saved = get_option(
+                self::OPTION_SETTINGS,
+                array()
+            );
+
+            if (! is_array($saved)) {
+                $saved = array();
+            }
+
+            if (
+                isset($saved['slug']) &&
+                self::LEGACY_DEFAULT_SLUG !== $saved['slug']
+            ) {
+                return;
+            }
+
+            $saved['slug'] = self::DEFAULT_SLUG;
+
+            update_option(
+                self::OPTION_SETTINGS,
+                $saved,
+                false
+            );
+
+            $this->refresh_rewrite_rules(
+                $this->is_active(),
+                self::LEGACY_DEFAULT_SLUG
+            );
+        }
+
+        /**
          * Autoriza a variável de consulta personalizada.
          *
          * @param array $vars Variáveis registradas.
@@ -343,7 +396,7 @@ if (! class_exists('WA_Suit_Module_Hide_Login')) {
                 return;
             }
 
-            if ('1' !== (string) get_query_var(self::QUERY_VAR)) {
+            if (! $this->is_custom_login_request()) {
                 return;
             }
 
@@ -363,6 +416,86 @@ if (! class_exists('WA_Suit_Module_Hide_Login')) {
         }
 
         /**
+         * Confirma que a variável interna veio da rota esperada.
+         *
+         * Em sites com links permanentes, impede que a variável
+         * pública de consulta revele a tela de login por query string.
+         *
+         * @return bool
+         */
+        private function is_custom_login_request()
+        {
+
+            if ('1' !== (string) get_query_var(self::QUERY_VAR)) {
+                return false;
+            }
+
+            $request_uri = isset($_SERVER['REQUEST_URI'])
+                ? wp_unslash($_SERVER['REQUEST_URI'])
+                : '';
+            $request_path = wp_parse_url(
+                $request_uri,
+                PHP_URL_PATH
+            );
+            $login_path = wp_parse_url(
+                $this->get_login_url(),
+                PHP_URL_PATH
+            );
+
+            if (! is_string($request_path) || ! is_string($login_path)) {
+                return false;
+            }
+
+            return untrailingslashit($request_path)
+                === untrailingslashit($login_path);
+        }
+
+        /**
+         * Envia visitantes não autenticados que tentam abrir o painel a /404.
+         *
+         * Mantém AJAX e formulários públicos do WordPress disponíveis.
+         *
+         * @return void
+         */
+        public function redirect_unauthenticated_admin()
+        {
+
+            $script_name = isset($_SERVER['SCRIPT_NAME'])
+                ? basename($_SERVER['SCRIPT_NAME'])
+                : '';
+            $request_uri = isset($_SERVER['REQUEST_URI'])
+                ? wp_unslash($_SERVER['REQUEST_URI'])
+                : '';
+            $request_path = wp_parse_url($request_uri, PHP_URL_PATH);
+            $admin_path   = wp_parse_url(admin_url(), PHP_URL_PATH);
+            $is_admin_path = is_string($request_path)
+                && is_string($admin_path)
+                && 0 === strpos(
+                    trailingslashit($request_path),
+                    trailingslashit($admin_path)
+                );
+
+            if (
+                (! is_admin() && ! $is_admin_path) ||
+                is_user_logged_in() ||
+                wp_doing_ajax() ||
+                wp_doing_cron() ||
+                'admin-post.php' === $script_name
+            ) {
+                return;
+            }
+
+            nocache_headers();
+            wp_safe_redirect(
+                home_url('/404/'),
+                302,
+                'WA Suit Hide Login'
+            );
+
+            exit;
+        }
+
+        /**
          * Redireciona acessos antigos a wp-login.php.
          *
          * A rota personalizada continua liberada.
@@ -372,9 +505,7 @@ if (! class_exists('WA_Suit_Module_Hide_Login')) {
         public function redirect_legacy_login()
         {
 
-            if (
-                '1' === (string) get_query_var(self::QUERY_VAR)
-            ) {
+            if ($this->is_custom_login_request()) {
                 return;
             }
 
@@ -1103,6 +1234,14 @@ if (! class_exists('WA_Suit_Module_Hide_Login')) {
                         <li>
                             <?php
                             echo esc_html__(
+                                'Visitantes não autenticados que acessarem wp-admin serão enviados para /404.',
+                                'wa-suit'
+                            );
+                            ?>
+                        </li>
+                        <li>
+                            <?php
+                            echo esc_html__(
                                 'Visitantes não autenticados que acessarem wp-login.php serão redirecionados para a página inicial.',
                                 'wa-suit'
                             );
@@ -1127,7 +1266,7 @@ if (! class_exists('WA_Suit_Module_Hide_Login')) {
                         <li>
                             <?php
                             echo esc_html__(
-                                'O módulo não adiciona bloqueio de IP nem altera o funcionamento de admin-ajax.php.',
+                                'O módulo não adiciona bloqueio de IP nem altera o funcionamento de admin-ajax.php e admin-post.php.',
                                 'wa-suit'
                             );
                             ?>

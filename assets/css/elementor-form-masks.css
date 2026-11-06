@@ -43,7 +43,7 @@ button.iti__search-clear.iti__hide {
 	border-radius: 0;
 	background: transparent !important;
 	box-shadow: none !important;
-	color: inherit;
+	color: var(--wa-suit-phone-input-color, inherit);
 	line-height: normal;
 	text-align: left;
 	text-decoration: none;
