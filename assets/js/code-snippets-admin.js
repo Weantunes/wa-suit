@@ -7,6 +7,175 @@ document.addEventListener('DOMContentLoaded', function () {
 		return;
 	}
 
+	const languageTabs = Array.from(document.querySelectorAll('[data-wa-language-filter]'));
+	const statusTabs = Array.from(document.querySelectorAll('[data-wa-status-filter]'));
+	const searchInput = document.querySelector('[data-wa-snippet-search]');
+	const locationFilter = document.querySelector('[data-wa-snippet-location-filter]');
+	const pageSizeInput = document.querySelector('[data-wa-snippet-page-size]');
+	const pagination = document.querySelector('[data-wa-snippet-pagination]');
+	const pageLabel = document.querySelector('[data-wa-snippet-page-label]');
+	const pageNumbers = document.querySelector('[data-wa-snippet-page-numbers]');
+	const emptyState = document.querySelector('[data-wa-snippet-empty]');
+	const bulkForm = document.querySelector('#wa-suit-snippets-bulk-form');
+	const bulkAction = bulkForm && bulkForm.querySelector('[name="bulk_action"]');
+	const selectionToggle = document.querySelector('[data-wa-selection-toggle]');
+	const selectedCountLabel = document.querySelector('[data-wa-selected-count]');
+	const bulkActions = document.querySelector('[data-wa-bulk-actions]');
+	const bulkActionButtons = Array.from(document.querySelectorAll('[data-wa-bulk-action]'));
+	const bulkDialog = document.querySelector('[data-wa-bulk-dialog]');
+	const bulkDialogTitle = bulkDialog && bulkDialog.querySelector('[data-wa-bulk-dialog-title]');
+	const bulkDialogMessage = bulkDialog && bulkDialog.querySelector('[data-wa-bulk-dialog-message]');
+	const bulkDialogConfirm = bulkDialog && bulkDialog.querySelector('[data-wa-bulk-dialog-confirm]');
+	const bulkDialogCancel = bulkDialog && bulkDialog.querySelector('[data-wa-bulk-dialog-cancel]');
+	let selectedLanguage = 'all';
+	let selectedStatus = 'all';
+	let selectedLocation = 'all';
+	let currentPage = 1;
+	let selectionMode = false;
+
+	const applySnippetFilters = function () {
+		const snippets = Array.from(list.querySelectorAll('[data-wa-snippet]'));
+		const query = searchInput ? searchInput.value.trim().toLocaleLowerCase() : '';
+		const pageSize = pageSizeInput ? Number(pageSizeInput.value) || 20 : 20;
+		const filtered = snippets.filter(function (snippet) {
+			const isTrashed = snippet.dataset.waSnippetTrashed === '1';
+			const language = snippet.dataset.waSnippetLanguage || 'html';
+			const location = snippet.dataset.waSnippetLocation || 'footer';
+			const toggle = snippet.querySelector('[data-wa-snippet-enabled]');
+			const title = snippet.querySelector('[data-wa-snippet-title-input]');
+			const code = snippet.querySelector('[data-wa-code-input]');
+
+			if (selectedLanguage !== 'all' && selectedLanguage !== language) {
+				return false;
+			}
+			if (selectedLocation !== 'all' && selectedLocation !== location) {
+				return false;
+			}
+			if (selectedStatus === 'trash' ? !isTrashed : isTrashed) {
+				return false;
+			}
+			if (selectedStatus === 'active' && (!toggle || !toggle.checked)) {
+				return false;
+			}
+			if (selectedStatus === 'inactive' && toggle && toggle.checked) {
+				return false;
+			}
+
+			const searchText = [
+				snippet.dataset.waSnippetId || '',
+				title ? title.value : '',
+				code ? code.value : ''
+			].join(' ').toLocaleLowerCase();
+			return !query || searchText.includes(query);
+		});
+		const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+		currentPage = Math.min(currentPage, pageCount);
+		const firstIndex = (currentPage - 1) * pageSize;
+		const visible = new Set(filtered.slice(firstIndex, firstIndex + pageSize));
+		const selectedSnippets = snippets.filter(function (snippet) {
+			return snippet.classList.contains('is-selected');
+		});
+		const selected = selectedSnippets.length;
+
+		snippets.forEach(function (snippet) {
+			snippet.hidden = !visible.has(snippet);
+		});
+		if (emptyState) {
+			emptyState.hidden = filtered.length > 0;
+		}
+		if (pagination) {
+			pagination.hidden = filtered.length === 0;
+		}
+		if (pageLabel) {
+			const start = filtered.length ? firstIndex + 1 : 0;
+			const end = Math.min(firstIndex + pageSize, filtered.length);
+			pageLabel.textContent = 'Itens ' + start + '–' + end + ' de ' + filtered.length;
+		}
+		if (pageNumbers) {
+			pageNumbers.replaceChildren();
+			if (pageCount > 1) {
+				for (let page = 1; page <= pageCount; page++) {
+					const pageButton = document.createElement('button');
+					pageButton.type = 'button';
+					pageButton.className = 'wa-code-snippets__page-number';
+					pageButton.textContent = String(page);
+					pageButton.setAttribute('aria-label', 'Página ' + page);
+					pageButton.setAttribute('aria-current', page === currentPage ? 'page' : 'false');
+					pageButton.classList.toggle('is-current', page === currentPage);
+					pageButton.addEventListener('click', function () {
+						currentPage = page;
+						applySnippetFilters();
+					});
+					pageNumbers.appendChild(pageButton);
+				}
+			}
+		}
+		if (selectionToggle) {
+			selectionToggle.setAttribute('aria-pressed', String(selectionMode));
+			selectionToggle.classList.toggle('is-active', selectionMode);
+			selectionToggle.title = selectionMode ? 'Sair da seleção' : 'Selecionar códigos';
+			const visibleLabel = selectionToggle.querySelector('[data-wa-selection-label]');
+			if (visibleLabel) {
+				visibleLabel.textContent = selectionMode ? 'Cancelar' : 'Selecionar';
+			}
+		}
+		if (selectedCountLabel) {
+			selectedCountLabel.hidden = selected === 0;
+			selectedCountLabel.textContent = selected + (selected === 1 ? ' selecionado' : ' selecionados');
+		}
+		if (bulkActions) {
+			bulkActions.hidden = !selectionMode;
+		}
+		const selectedTrashItem = selectedSnippets.some(function (snippet) { return snippet.dataset.waSnippetTrashed === '1'; });
+		bulkActionButtons.forEach(function (button) {
+			const action = button.dataset.waBulkAction;
+			let visibleAction = selectionMode;
+			if (selectedStatus === 'trash') {
+				visibleAction = visibleAction && (action === 'restore' || action === 'delete');
+			} else {
+				visibleAction = visibleAction && !selectedTrashItem && (
+					action === 'trash' ||
+					action === 'activate' ||
+					action === 'deactivate'
+				);
+			}
+			button.hidden = !visibleAction;
+			button.disabled = selected === 0;
+		});
+		list.closest('.wa-code-snippets').classList.toggle('is-selecting', selectionMode);
+
+		const allSnippets = snippets.filter(function (snippet) {
+			return snippet.dataset.waSnippetTrashed !== '1';
+		});
+		const counts = {
+			all: allSnippets.length,
+			active: allSnippets.filter(function (snippet) {
+				const toggle = snippet.querySelector('[data-wa-snippet-enabled]');
+				return toggle && toggle.checked;
+			}).length,
+			inactive: allSnippets.filter(function (snippet) {
+				const toggle = snippet.querySelector('[data-wa-snippet-enabled]');
+				return !toggle || !toggle.checked;
+			}).length,
+			trash: snippets.length - allSnippets.length
+		};
+		Object.keys(counts).forEach(function (key) {
+			const counter = document.querySelector('[data-wa-status-count="' + key + '"]');
+			if (counter) {
+				counter.textContent = counts[key];
+			}
+		});
+		['all', 'html', 'css', 'js', 'php', 'shortcode'].forEach(function (language) {
+			const counter = document.querySelector('[data-wa-language-count="' + language + '"]');
+			if (counter) {
+				const count = language === 'all'
+					? allSnippets.length
+					: allSnippets.filter(function (snippet) { return snippet.dataset.waSnippetLanguage === language; }).length;
+				counter.textContent = count;
+			}
+		});
+	};
+
 	const updateLineNumbers = function (editor) {
 		const input = editor.querySelector('[data-wa-code-input]');
 		const lines = editor.querySelector('[data-wa-code-lines]');
@@ -129,6 +298,16 @@ document.addEventListener('DOMContentLoaded', function () {
 
 			summary.textContent = targetDetail + ' · ' + (selectedDevices.join(', ') || 'Selecione dispositivo');
 		}
+		if (language) {
+			snippet.dataset.waSnippetLanguage = language.value;
+		}
+		if (location) {
+			snippet.dataset.waSnippetLocation = location.value;
+		}
+		if (titleInput) {
+			snippet.dataset.waSnippetSearch = titleInput.value;
+		}
+		applySnippetFilters();
 	};
 
 	const bindSnippet = function (snippet, collapse) {
@@ -142,15 +321,32 @@ document.addEventListener('DOMContentLoaded', function () {
 		const toggleLabel = snippet.querySelector('[data-wa-snippet-enabled-label]');
 		const codeEditor = snippet.querySelector('[data-wa-code-editor]');
 		const codeInput = codeEditor && codeEditor.querySelector('[data-wa-code-input]');
-		const removeButton = snippet.querySelector('[data-wa-snippet-remove]');
 		const duplicateButton = snippet.querySelector('.wa-code-snippet__duplicate');
+		const rowActions = Array.from(snippet.querySelectorAll('[data-wa-snippet-action]'));
+		const removeDraftButton = snippet.querySelector('[data-wa-snippet-draft-remove]');
 		const urlFields = snippet.querySelector('[data-wa-url-fields]');
 		const addUrlButton = snippet.querySelector('[data-wa-url-add]');
 
-		if (duplicateButton) {
-			duplicateButton.addEventListener('click', function (event) {
+		[duplicateButton].concat(rowActions).forEach(function (control) {
+			if (control) {
+				control.addEventListener('click', function (event) {
+					event.stopPropagation();
+					if (control.hasAttribute('data-wa-confirm-delete') && !window.confirm('Excluir este código permanentemente? Esta ação não pode ser desfeita.')) {
+						event.preventDefault();
+					}
+				});
+			}
+		});
+		if (removeDraftButton) {
+			removeDraftButton.addEventListener('click', function (event) {
+				event.preventDefault();
 				event.stopPropagation();
+				snippet.remove();
+				applySnippetFilters();
 			});
+		}
+		if (codeInput) {
+			codeInput.addEventListener('input', applySnippetFilters);
 		}
 
 		[language, location, titleInput, shortcodeOnly].forEach(function (control) {
@@ -159,6 +355,7 @@ document.addEventListener('DOMContentLoaded', function () {
 				control.addEventListener('change', function () { updateSnippet(snippet); });
 			}
 		});
+
 		targets.forEach(function (target) {
 			target.addEventListener('change', function () {
 				const allTarget = targets.find(function (item) { return item.value === 'all'; });
@@ -229,7 +426,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
 		if (codeEditor && codeInput) {
 			updateLineNumbers(codeEditor);
-			codeInput.addEventListener('input', function () { updateLineNumbers(codeEditor); });
+			codeInput.addEventListener('input', function () {
+				updateLineNumbers(codeEditor);
+				applySnippetFilters();
+			});
 			codeInput.addEventListener('scroll', function () { updateLineNumbers(codeEditor); });
 
 			const codeShell = codeEditor.closest('[data-wa-code-shell]');
@@ -254,8 +454,9 @@ document.addEventListener('DOMContentLoaded', function () {
 				const previousState = !toggle.checked;
 				if (toggle.dataset.snippetPersisted === '0') {
 					if (toggleLabel) {
-						toggleLabel.textContent = toggle.checked ? 'Ativo' : 'Inativo';
+						toggleLabel.textContent = toggle.checked ? 'ON' : 'OFF';
 					}
+					applySnippetFilters();
 					return;
 				}
 
@@ -289,14 +490,15 @@ document.addEventListener('DOMContentLoaded', function () {
 					.then(function (data) {
 						toggle.checked = Boolean(data.data.enabled);
 						if (toggleLabel) {
-							toggleLabel.textContent = data.data.enabled ? 'Ativo' : 'Inativo';
+							toggleLabel.textContent = data.data.enabled ? 'ON' : 'OFF';
 						}
 						toggle.title = data.data.message;
+						applySnippetFilters();
 					})
 					.catch(function (error) {
 						toggle.checked = previousState;
 						if (toggleLabel) {
-							toggleLabel.textContent = previousState ? 'Ativo' : 'Inativo';
+							toggleLabel.textContent = previousState ? 'ON' : 'OFF';
 						}
 						toggle.title = error.message;
 						window.alert(error.message);
@@ -305,13 +507,6 @@ document.addEventListener('DOMContentLoaded', function () {
 						toggle.disabled = false;
 						toggle.removeAttribute('aria-busy');
 					});
-			});
-		}
-
-		if (removeButton) {
-			removeButton.addEventListener('click', function (event) {
-				event.preventDefault();
-				snippet.remove();
 			});
 		}
 
@@ -351,6 +546,202 @@ document.addEventListener('DOMContentLoaded', function () {
 	list.querySelectorAll('[data-wa-snippet]').forEach(function (snippet) {
 		bindSnippet(snippet, true);
 	});
+
+	languageTabs.forEach(function (tab) {
+		tab.addEventListener('click', function () {
+			selectedLanguage = tab.dataset.waLanguageFilter || 'all';
+			currentPage = 1;
+			languageTabs.forEach(function (item) {
+				item.setAttribute('aria-pressed', item === tab ? 'true' : 'false');
+			});
+			applySnippetFilters();
+		});
+	});
+
+	statusTabs.forEach(function (tab) {
+		tab.addEventListener('click', function () {
+			list.querySelectorAll('[data-wa-snippet].is-selected').forEach(function (snippet) {
+				snippet.classList.remove('is-selected');
+			});
+			const requestedStatus = tab.dataset.waStatusFilter || 'all';
+			selectedStatus = selectedStatus === requestedStatus ? 'all' : requestedStatus;
+			currentPage = 1;
+			statusTabs.forEach(function (item) {
+				item.setAttribute('aria-pressed', item.dataset.waStatusFilter === selectedStatus ? 'true' : 'false');
+			});
+			applySnippetFilters();
+		});
+	});
+
+	if (searchInput) {
+		searchInput.addEventListener('input', function () {
+			currentPage = 1;
+			applySnippetFilters();
+		});
+	}
+	if (locationFilter) {
+		locationFilter.addEventListener('change', function () {
+			selectedLocation = locationFilter.value || 'all';
+			currentPage = 1;
+			applySnippetFilters();
+		});
+	}
+	if (pageSizeInput) {
+		pageSizeInput.addEventListener('change', function () {
+			currentPage = 1;
+			applySnippetFilters();
+		});
+	}
+	if (selectionToggle) {
+		selectionToggle.addEventListener('click', function () {
+			selectionMode = !selectionMode;
+			if (selectionMode) {
+				list.querySelectorAll('[data-wa-snippet][open]').forEach(function (snippet) {
+					snippet.open = false;
+				});
+			}
+			if (!selectionMode) {
+				list.querySelectorAll('[data-wa-snippet].is-selected').forEach(function (snippet) {
+					snippet.classList.remove('is-selected');
+				});
+			}
+			applySnippetFilters();
+		});
+	}
+	list.addEventListener('click', function (event) {
+		if (!selectionMode || !(event.target instanceof Element)) {
+			return;
+		}
+		const snippet = event.target.closest('[data-wa-snippet]');
+		if (!snippet || (snippet.dataset.waSnippetId || '').startsWith('new-') ||
+			event.target.closest('button, a, input, select, textarea, label, [role="button"]')) {
+			return;
+		}
+
+		event.preventDefault();
+		event.stopPropagation();
+		snippet.classList.toggle('is-selected');
+		applySnippetFilters();
+	}, true);
+	let pendingBulkAction = '';
+	const closeBulkDialog = function () {
+		if (!bulkDialog) {
+			return;
+		}
+		bulkDialog.hidden = true;
+		pendingBulkAction = '';
+	};
+	const submitBulkAction = function (action) {
+		if (!bulkForm || !bulkAction) {
+			return;
+		}
+		const selected = Array.from(list.querySelectorAll('[data-wa-snippet].is-selected'))
+			.filter(function (snippet) { return !(snippet.dataset.waSnippetId || '').startsWith('new-'); });
+		if (!selected.length) {
+			return;
+		}
+		bulkForm.querySelectorAll('[name="snippet_ids[]"]').forEach(function (field) {
+			field.remove();
+		});
+		selected.forEach(function (snippet) {
+			const input = document.createElement('input');
+			input.type = 'hidden';
+			input.name = 'snippet_ids[]';
+			input.value = snippet.dataset.waSnippetId;
+			bulkForm.appendChild(input);
+		});
+		bulkAction.value = action;
+		bulkForm.requestSubmit();
+	};
+	bulkActionButtons.forEach(function (button) {
+		button.addEventListener('click', function () {
+			const action = button.dataset.waBulkAction;
+			if (!action || !bulkForm || !bulkAction) {
+				return;
+			}
+			const selectedCount = list.querySelectorAll('[data-wa-snippet].is-selected:not([data-wa-snippet-id^="new-"])').length;
+			if (!selectedCount) {
+				return;
+			}
+			const actionLabels = {
+				trash: 'Mover para a lixeira',
+				activate: 'Ativar',
+				deactivate: 'Desativar',
+				restore: 'Restaurar',
+				delete: 'Excluir permanentemente'
+			};
+			const actionLabel = actionLabels[action];
+			if (!actionLabel) {
+				return;
+			}
+			if (!bulkDialog || !bulkDialogTitle || !bulkDialogMessage || !bulkDialogConfirm) {
+				if (window.confirm(actionLabel + ' os ' + selectedCount + ' códigos selecionados?')) {
+					submitBulkAction(action);
+				}
+				return;
+			}
+			pendingBulkAction = action;
+			bulkDialogTitle.textContent = action === 'delete' ? 'Excluir códigos permanentemente?' : actionLabel + ' códigos selecionados?';
+			bulkDialogMessage.textContent = action === 'delete'
+				? 'Esta ação não pode ser desfeita. Os ' + selectedCount + ' códigos selecionados serão excluídos permanentemente.'
+				: actionLabel + ' os ' + selectedCount + ' códigos selecionados de uma só vez?';
+			bulkDialogConfirm.textContent = action === 'delete' ? 'Excluir permanentemente' : 'Confirmar';
+			bulkDialogConfirm.hidden = false;
+			bulkDialogConfirm.classList.toggle('is-destructive', action === 'delete' || action === 'trash');
+			bulkDialog.hidden = false;
+			bulkDialogConfirm.focus();
+		});
+	});
+	if (bulkDialog && bulkDialogConfirm && bulkAction && bulkForm) {
+		bulkDialogConfirm.addEventListener('click', function () {
+			if (!pendingBulkAction) {
+				return;
+			}
+			const action = pendingBulkAction;
+			closeBulkDialog();
+			submitBulkAction(action);
+		});
+	}
+	if (bulkDialog && bulkDialogCancel) {
+		bulkDialog.querySelectorAll('[data-wa-bulk-dialog-cancel]').forEach(function (cancelButton) {
+			cancelButton.addEventListener('click', function () {
+				closeBulkDialog();
+				if (selectionToggle) {
+					selectionToggle.focus();
+				}
+			});
+		});
+		bulkDialog.addEventListener('keydown', function (event) {
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				closeBulkDialog();
+				if (selectionToggle) {
+					selectionToggle.focus();
+				}
+			}
+		});
+	}
+	if (bulkForm) {
+		bulkForm.addEventListener('submit', function (event) {
+			const selected = Array.from(list.querySelectorAll('[data-wa-snippet].is-selected'))
+				.filter(function (snippet) { return !(snippet.dataset.waSnippetId || '').startsWith('new-'); });
+			if (!selected.length || !bulkAction || !bulkAction.value) {
+				event.preventDefault();
+				bulkAction.value = '';
+				if (bulkDialogTitle && bulkDialogMessage && bulkDialog) {
+					bulkDialogTitle.textContent = 'Não foi possível aplicar a ação';
+					bulkDialogMessage.textContent = !selected.length
+						? 'Selecione pelo menos um código salvo para continuar.'
+						: 'Escolha uma ação válida e tente novamente.';
+					bulkDialog.hidden = false;
+					if (bulkDialogConfirm) {
+						bulkDialogConfirm.hidden = true;
+					}
+				}
+				return;
+			}
+		});
+	}
 
 	const form = list.closest('form');
 	if (form) {
@@ -403,6 +794,22 @@ document.addEventListener('DOMContentLoaded', function () {
 	}
 
 	addButton.addEventListener('click', function () {
+		selectedLanguage = 'all';
+		selectedStatus = 'all';
+		currentPage = 1;
+		if (searchInput) {
+			searchInput.value = '';
+		}
+		if (locationFilter) {
+			locationFilter.value = 'all';
+			selectedLocation = 'all';
+		}
+		languageTabs.forEach(function (tab) {
+			tab.setAttribute('aria-pressed', tab.dataset.waLanguageFilter === 'all' ? 'true' : 'false');
+		});
+		statusTabs.forEach(function (tab) {
+			tab.setAttribute('aria-pressed', tab.dataset.waStatusFilter === 'all' ? 'true' : 'false');
+		});
 		const key = 'new-' + Date.now() + '-' + Math.random().toString(36).slice(2);
 		const html = template.innerHTML.split('__SNIPPET_KEY__').join(key);
 		const wrapper = document.createElement('div');
@@ -412,7 +819,12 @@ document.addEventListener('DOMContentLoaded', function () {
 		if (snippet) {
 			list.appendChild(snippet);
 			bindSnippet(snippet, false);
+			snippet.open = true;
+			currentPage = 1;
+			applySnippetFilters();
 			snippet.scrollIntoView({ behavior: 'smooth', block: 'center' });
 		}
 	});
+
+	applySnippetFilters();
 });

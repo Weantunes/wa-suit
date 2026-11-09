@@ -60,7 +60,6 @@ class WA_Suit_Admin {
 		add_filter( 'page_row_actions', array( $this, 'add_duplicate_post_action' ), 10, 2 );
 	}
 
-
 /**
  * Personaliza o ícone do WA Suit no menu administrativo.
  *
@@ -127,6 +126,15 @@ public function add_menu() {
 		'wa-suit-settings',
 		array( $this, 'render_settings_menu_page' )
 	);
+
+	add_submenu_page(
+		'wa-suit',
+		__( 'Suporte', 'wa-suit' ),
+		__( 'Suporte', 'wa-suit' ),
+		'manage_options',
+		'wa-suit-support',
+		array( $this, 'render_support_menu_page' )
+	);
 }
 
 
@@ -157,6 +165,50 @@ public function render_settings_menu_page() {
 	$this->render_page( 'settings' );
 }
 
+/**
+ * Renders the WA Suit support page.
+ *
+ * @return void
+ */
+public function render_support_menu_page() {
+	$plugin_data = get_file_data( WA_SUIT_FILE, array( 'Version' => 'Version' ) );
+	$plugin_version = isset( $plugin_data['Version'] ) && '' !== $plugin_data['Version']
+		? $plugin_data['Version']
+		: WA_SUIT_VERSION;
+	?>
+	<div class="wrap wa-suit-support">
+		<h1><?php echo esc_html__( 'Suporte WA Suit', 'wa-suit' ); ?></h1>
+		<p><?php echo esc_html__( 'Encontre ajuda para configurar os recursos do plugin ou relatar um problema.', 'wa-suit' ); ?></p>
+		<div class="card">
+			<h2><?php echo esc_html__( 'Atendimento', 'wa-suit' ); ?></h2>
+			<p><?php echo esc_html__( 'Acesse o site oficial da WA Web Design para solicitar suporte. Ao relatar um problema, informe a versão do WA Suit, do WordPress e do PHP e descreva os passos para reproduzi-lo.', 'wa-suit' ); ?></p>
+			<p><a class="button button-primary" href="<?php echo esc_url( 'https://wawebdesign.com.br/' ); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html__( 'Acessar WA Web Design', 'wa-suit' ); ?></a></p>
+		</div>
+		<div class="card">
+			<h2><?php echo esc_html__( 'Informações do ambiente', 'wa-suit' ); ?></h2>
+			<p><?php echo esc_html( sprintf( __( 'WA Suit %1$s · WordPress %2$s · PHP %3$s', 'wa-suit' ), $plugin_version, get_bloginfo( 'version' ), PHP_VERSION ) ); ?></p>
+		</div>
+		<?php $this->render_plugin_footer(); ?>
+	</div>
+	<?php
+}
+
+/**
+ * Renders shared support and copyright links on WA Suit pages.
+ *
+ * @return void
+ */
+private function render_plugin_footer() {
+	$whatsapp_url = 'https://api.whatsapp.com/send?phone=5511999077418&text=' . rawurlencode( 'Olá! Gostaria de obter suporte para o plugin WA Suit.' );
+	?>
+	<footer class="wa-admin-footer wa-suit-plugin-footer">
+		<a href="<?php echo esc_url( admin_url( 'admin.php?page=wa-suit-support' ) ); ?>"><?php echo esc_html__( 'Ajuda', 'wa-suit' ); ?></a>
+		<p>© <?php echo esc_html( wp_date( 'Y' ) ); ?> <a href="<?php echo esc_url( 'https://wawebdesign.com.br/' ); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html__( 'WA Web Design. Todos os direitos reservados.', 'wa-suit' ); ?></a></p>
+		<a class="wa-suit-plugin-footer__contact" href="<?php echo esc_url( $whatsapp_url ); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html__( 'Fale com um especialista', 'wa-suit' ); ?></a>
+	</footer>
+	<?php
+}
+
 	/**
 	 * Enqueues assets only on plugin pages.
 	 *
@@ -164,7 +216,7 @@ public function render_settings_menu_page() {
 	 * @return void
 	 */
 	public function enqueue_assets( $hook_suffix ) {
-		$allowed_pages = array( 'wa-suit', 'wa-suit-modules', 'wa-suit-settings' );
+		$allowed_pages = array( 'wa-suit', 'wa-suit-modules', 'wa-suit-settings', 'wa-suit-support' );
 		$current_page  = isset( $_GET['page'] ) && is_string( $_GET['page'] )
 			? sanitize_key( wp_unslash( $_GET['page'] ) )
 			: '';
@@ -740,6 +792,7 @@ public function render_settings_menu_page() {
 					$this->render_dashboard_tab( $all_modules );
 				}
 				?>
+    <?php $this->render_plugin_footer(); ?>
 </div>
 <?php
 		}

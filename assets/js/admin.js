@@ -9,6 +9,22 @@
 	$(function () {
 		const $toast = $('#wa-suit-toast');
 		let toastTimer = null;
+		const currentPage = new URLSearchParams(window.location.search).get('page');
+		const waSuitPages = ['wa-suit', 'wa-suit-modules', 'wa-suit-settings', 'wa-suit-support'];
+
+		if (waSuitPages.indexOf(currentPage) !== -1) {
+			document.querySelectorAll('#wpbody-content .notice').forEach(function (notice) {
+				const message = notice.textContent.toLocaleLowerCase();
+				const hasFooEventsSettingsLink = notice.querySelector('a[href*="fooevents-settings"]');
+				if (
+					hasFooEventsSettingsLink &&
+					message.indexOf('fooevents') !== -1 &&
+					message.indexOf('license key is not set') !== -1
+				) {
+					notice.remove();
+				}
+			});
+		}
 
 		/**
 		 * Shows clean floating toast notification.

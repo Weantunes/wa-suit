@@ -802,6 +802,30 @@
 	text-align: center;
 }
 
+.wa-admin-footer.wa-suit-plugin-footer {
+	align-items: center;
+	border-top: 1px solid #e5e7eb;
+	display: flex;
+	gap: 16px;
+	justify-content: center;
+	margin-top: 28px;
+	padding: 18px 4px 8px;
+}
+
+.wa-suit-plugin-footer a {
+	color: var(--wa-muted);
+	text-decoration: none;
+}
+
+.wa-suit-plugin-footer a:hover {
+	color: var(--wa-accent);
+	text-decoration: underline;
+}
+
+.wa-suit-plugin-footer__contact {
+	font-weight: 600;
+}
+
 .wa-admin-footer p {
 	margin: 0;
 }
@@ -1360,6 +1384,11 @@
 
 	.wa-admin-footer {
 		padding-bottom: 12px;
+	}
+
+	.wa-admin-footer.wa-suit-plugin-footer {
+		flex-wrap: wrap;
+		gap: 10px 16px;
 	}
 }
 
