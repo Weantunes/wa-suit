@@ -22,6 +22,11 @@ define( 'WA_SUIT_FILE', __FILE__ );
 define( 'WA_SUIT_PATH', plugin_dir_path( __FILE__ ) );
 define( 'WA_SUIT_URL', plugin_dir_url( __FILE__ ) );
 
+require_once WA_SUIT_PATH . 'modules/error-screen/class-wa-suit-error-screen.php';
+WA_Suit_Error_Screen::init();
+register_activation_hook( WA_SUIT_FILE, array( 'WA_Suit_Error_Screen', 'install' ) );
+register_deactivation_hook( WA_SUIT_FILE, array( 'WA_Suit_Error_Screen', 'uninstall' ) );
+
 require_once WA_SUIT_PATH . 'includes/class-wa-suit.php';
 
 $wa_suit = new WA_Suit();

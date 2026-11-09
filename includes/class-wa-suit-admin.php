@@ -903,7 +903,7 @@ private function render_plugin_footer() {
 			$settings_section = isset( $_GET['settings_section'] ) && is_string( $_GET['settings_section'] )
 				? sanitize_key( wp_unslash( $_GET['settings_section'] ) )
 				: 'general';
-			if ( ! in_array( $settings_section, array( 'general', 'developer', 'elementor-pro' ), true ) ) {
+			if ( ! in_array( $settings_section, array( 'general', 'developer', 'elementor-pro', 'error-screen' ), true ) ) {
 				$settings_section = 'general';
 			}
 			?>
@@ -929,6 +929,10 @@ private function render_plugin_footer() {
 			<span class="dashicons dashicons-admin-customizer" aria-hidden="true"></span>
 			<?php echo esc_html__( 'Elementor Pro', 'wa-suit' ); ?>
 		</a>
+		<a href="<?php echo esc_url( add_query_arg( array( 'page' => 'wa-suit', 'tab' => 'settings', 'settings_section' => 'error-screen' ), admin_url( 'admin.php' ) ) ); ?>" <?php echo 'error-screen' === $settings_section ? 'aria-current="page"' : ''; ?>>
+			<span class="dashicons dashicons-warning" aria-hidden="true"></span>
+			<?php echo esc_html__( 'Tela de erro', 'wa-suit' ); ?>
+		</a>
 	</nav>
 
 	<?php if ( isset( $_GET['settings-saved'] ) && is_string( $_GET['settings-saved'] ) && '1' === sanitize_text_field( wp_unslash( $_GET['settings-saved'] ) ) ) : ?>
@@ -943,6 +947,12 @@ private function render_plugin_footer() {
 
 	<?php if ( 'elementor-pro' === $settings_section ) : ?>
 		<?php $this->render_elementor_pro_settings_tab(); ?>
+	</div>
+	<?php return; ?>
+	<?php endif; ?>
+
+	<?php if ( 'error-screen' === $settings_section ) : ?>
+		<?php WA_Suit_Error_Screen::render_settings(); ?>
 	</div>
 	<?php return; ?>
 	<?php endif; ?>
@@ -1147,7 +1157,7 @@ private function render_plugin_footer() {
 						<span class="dashicons dashicons-warning" aria-hidden="true"></span>
 						<div>
 							<h3><?php echo esc_html__( 'Depuração de erros fatais', 'wa-suit' ); ?></h3>
-							<p><?php echo esc_html__( 'Quando ligada, registra erros fatais de PHP em um arquivo privado do WA Suit.', 'wa-suit' ); ?></p>
+							<p><?php echo esc_html__( 'Quando ligada, registra erros fatais de PHP em um arquivo privado do WA Suit. O aviso por e-mail e a proteção de snippets funcionam independentemente desta opção.', 'wa-suit' ); ?></p>
 						</div>
 					</div>
 
@@ -1162,6 +1172,7 @@ private function render_plugin_footer() {
 							</span>
 						</label>
 						<p class="description"><?php echo esc_html__( 'Esta opção não altera WP_DEBUG nem o arquivo wp-config.php. O modo de depuração nativo do WordPress é configurado separadamente no servidor.', 'wa-suit' ); ?></p>
+						<p class="description"><?php echo esc_html__( 'Erros fatais detectados após o WA Suit carregar geram uma tentativa de aviso para suporte@wawebdesign.com.br. Snippets PHP que falharem são desativados automaticamente. A entrega depende da configuração de e-mail do servidor ou SMTP.', 'wa-suit' ); ?></p>
 						<p><button type="submit" class="wa-admin-btn wa-admin-btn--primary"><?php echo esc_html__( 'Salvar depuração', 'wa-suit' ); ?></button></p>
 					</form>
 				</section>

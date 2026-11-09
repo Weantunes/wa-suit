@@ -23,6 +23,13 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 	private $php_output = array();
 
 	/**
+	 * Results of PHP snippets already evaluated during this request.
+	 *
+	 * @var array<string, string>
+	 */
+	private $php_execution_results = array();
+
+	/**
 	 * Available snippet languages.
 	 *
 	 * @var array<string, string>
@@ -124,6 +131,7 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 	{
 		add_action('wp', array($this, 'execute_frontend_php_snippets'), 0);
 		add_action('admin_init', array($this, 'execute_ajax_php_snippets'), 0);
+		add_action('admin_notices', array($this, 'render_php_conflict_notices'));
 		add_action('wp_head', array($this, 'render_head_snippets'), 99);
 		add_action('wp_body_open', array($this, 'render_body_snippets'), 1);
 		add_action('wp_footer', array($this, 'render_footer_snippets'), 99);
@@ -270,7 +278,8 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 		$existing_snippets = isset($existing_settings['snippets']) && is_array($existing_settings['snippets'])
 			? $existing_settings['snippets']
 			: array();
-		$snippets  = array();
+		$snippets       = array();
+		$syntax_notices = array();
 
 		foreach ($submitted as $key => $input) {
 			if (! is_array($input)) {
@@ -286,12 +295,45 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 				wp_die(esc_html__('Um ou mais códigos estão incompletos ou têm opções inválidas. Revise nome, código, linguagem e regra de exibição.', 'wa-suit'));
 			}
 
-			$id                = sanitize_key((string) $key);
+			$id = sanitize_key((string) $key);
+			if ('' === $id) {
+				$id = wp_generate_uuid4();
+			}
 			$snippet['trashed'] = isset($existing_snippets[$id]['trashed']) && ! empty($existing_snippets[$id]['trashed']) ? '1' : '0';
-			$snippets[$id ? $id : wp_generate_uuid4()] = $snippet;
+			$existing_snippet = isset($existing_snippets[$id]) && is_array($existing_snippets[$id])
+				? $existing_snippets[$id]
+				: array();
+			if (isset($existing_snippet['created_at']) && is_string($existing_snippet['created_at']) && '' !== $existing_snippet['created_at']) {
+				$snippet['created_at'] = $existing_snippet['created_at'];
+				$snippet['created_by_id'] = isset($existing_snippet['created_by_id']) ? absint($existing_snippet['created_by_id']) : 0;
+				$snippet['created_by_name'] = isset($existing_snippet['created_by_name']) && is_string($existing_snippet['created_by_name'])
+					? $existing_snippet['created_by_name']
+					: '';
+			} else {
+				$current_user = wp_get_current_user();
+				$snippet['created_at'] = current_time('mysql');
+				$snippet['created_by_id'] = get_current_user_id();
+				$snippet['created_by_name'] = $current_user instanceof WP_User ? $current_user->display_name : '';
+			}
+
+			if ('php' === $snippet['language'] && '1' === $snippet['enabled']) {
+				$syntax_error = $this->get_php_syntax_error($snippet['code']);
+				if ('' !== $syntax_error) {
+					$snippet['enabled'] = '0';
+					$syntax_notices[] = array(
+						'title'   => $snippet['title'],
+						'message' => $syntax_error,
+					);
+				}
+			}
+
+			$snippets[$id] = $snippet;
 		}
 
 		$this->update_settings(array('snippets' => $snippets));
+		foreach ($syntax_notices as $notice) {
+			WA_Suit_Debug::queue_snippet_failure_notice($notice['title'], $notice['message']);
+		}
 
 		$redirect_url = add_query_arg(
 			array(
@@ -451,6 +493,10 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 		$copy['title']   = sprintf(__('%1$s (cópia %2$d)', 'wa-suit'), $base_title, $copy_number);
 		$copy['enabled'] = '0';
 		$copy['trashed'] = '0';
+		$copy['created_at'] = current_time('mysql');
+		$current_user = wp_get_current_user();
+		$copy['created_by_id'] = get_current_user_id();
+		$copy['created_by_name'] = $current_user instanceof WP_User ? $current_user->display_name : '';
 		$new_id = wp_generate_uuid4();
 
 		$snippets[$new_id] = $copy;
@@ -535,37 +581,45 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 					<input type="hidden" name="bulk_action" value="">
 					<?php wp_nonce_field('wa_suit_manage_code_snippets'); ?>
 				</form>
-				<div class="wa-code-snippets__selection-tools">
-					<button type="button" class="wa-code-snippets__select-mode" aria-pressed="false" data-wa-selection-toggle title="<?php echo esc_attr__('Selecionar códigos', 'wa-suit'); ?>">
-						<span class="dashicons dashicons-yes-alt" aria-hidden="true"></span>
-						<span data-wa-selection-label><?php echo esc_html__('Selecionar', 'wa-suit'); ?></span>
+				<div class="wa-code-snippets__toolbar-top">
+					<div class="wa-code-snippets__selection-tools">
+						<button type="button" class="wa-code-snippets__select-mode" aria-pressed="false" data-wa-selection-toggle title="<?php echo esc_attr__('Selecionar códigos', 'wa-suit'); ?>">
+							<span class="dashicons dashicons-yes-alt" aria-hidden="true"></span>
+							<span data-wa-selection-label><?php echo esc_html__('Selecionar', 'wa-suit'); ?></span>
+						</button>
+						<span class="wa-code-snippets__selected-count" data-wa-selected-count hidden></span>
+						<div class="wa-code-snippets__bulk-actions" data-wa-bulk-actions hidden>
+							<button type="button" data-wa-bulk-action="trash" title="<?php echo esc_attr__('Mover para a lixeira', 'wa-suit'); ?>" aria-label="<?php echo esc_attr__('Mover selecionados para a lixeira', 'wa-suit'); ?>"><span class="dashicons dashicons-trash" aria-hidden="true"></span><?php echo esc_html__('Lixeira', 'wa-suit'); ?></button>
+							<button type="button" data-wa-bulk-action="activate" title="<?php echo esc_attr__('Ativar selecionados', 'wa-suit'); ?>" aria-label="<?php echo esc_attr__('Ativar selecionados', 'wa-suit'); ?>"><span class="dashicons dashicons-controls-play" aria-hidden="true"></span><?php echo esc_html__('Ativar', 'wa-suit'); ?></button>
+							<button type="button" data-wa-bulk-action="deactivate" title="<?php echo esc_attr__('Desativar selecionados', 'wa-suit'); ?>" aria-label="<?php echo esc_attr__('Desativar selecionados', 'wa-suit'); ?>"><span class="dashicons dashicons-controls-pause" aria-hidden="true"></span><?php echo esc_html__('Desativar', 'wa-suit'); ?></button>
+							<button type="button" data-wa-bulk-action="restore" title="<?php echo esc_attr__('Restaurar selecionados', 'wa-suit'); ?>" aria-label="<?php echo esc_attr__('Restaurar selecionados', 'wa-suit'); ?>"><span class="dashicons dashicons-undo" aria-hidden="true"></span><?php echo esc_html__('Restaurar', 'wa-suit'); ?></button>
+							<button type="button" data-wa-bulk-action="delete" title="<?php echo esc_attr__('Excluir permanentemente', 'wa-suit'); ?>" aria-label="<?php echo esc_attr__('Excluir permanentemente', 'wa-suit'); ?>"><span class="dashicons dashicons-no" aria-hidden="true"></span><?php echo esc_html__('Excluir', 'wa-suit'); ?></button>
+						</div>
+					</div>
+					<button type="button" class="wa-admin-btn wa-admin-btn--primary wa-code-snippets__add" data-wa-snippet-add title="<?php echo esc_attr__('Adicionar código', 'wa-suit'); ?>" aria-label="<?php echo esc_attr__('Adicionar código', 'wa-suit'); ?>">
+						<span class="dashicons dashicons-plus" aria-hidden="true"></span>
+						<?php echo esc_html__('Adicionar código', 'wa-suit'); ?>
 					</button>
-					<span class="wa-code-snippets__selected-count" data-wa-selected-count hidden></span>
-					<div class="wa-code-snippets__bulk-actions" data-wa-bulk-actions hidden>
-						<button type="button" data-wa-bulk-action="trash" title="<?php echo esc_attr__('Mover para a lixeira', 'wa-suit'); ?>" aria-label="<?php echo esc_attr__('Mover selecionados para a lixeira', 'wa-suit'); ?>"><span class="dashicons dashicons-trash" aria-hidden="true"></span><?php echo esc_html__('Lixeira', 'wa-suit'); ?></button>
-						<button type="button" data-wa-bulk-action="activate" title="<?php echo esc_attr__('Ativar selecionados', 'wa-suit'); ?>" aria-label="<?php echo esc_attr__('Ativar selecionados', 'wa-suit'); ?>"><span class="dashicons dashicons-controls-play" aria-hidden="true"></span><?php echo esc_html__('Ativar', 'wa-suit'); ?></button>
-						<button type="button" data-wa-bulk-action="deactivate" title="<?php echo esc_attr__('Desativar selecionados', 'wa-suit'); ?>" aria-label="<?php echo esc_attr__('Desativar selecionados', 'wa-suit'); ?>"><span class="dashicons dashicons-controls-pause" aria-hidden="true"></span><?php echo esc_html__('Desativar', 'wa-suit'); ?></button>
-						<button type="button" data-wa-bulk-action="restore" title="<?php echo esc_attr__('Restaurar selecionados', 'wa-suit'); ?>" aria-label="<?php echo esc_attr__('Restaurar selecionados', 'wa-suit'); ?>"><span class="dashicons dashicons-undo" aria-hidden="true"></span><?php echo esc_html__('Restaurar', 'wa-suit'); ?></button>
-						<button type="button" data-wa-bulk-action="delete" title="<?php echo esc_attr__('Excluir permanentemente', 'wa-suit'); ?>" aria-label="<?php echo esc_attr__('Excluir permanentemente', 'wa-suit'); ?>"><span class="dashicons dashicons-no" aria-hidden="true"></span><?php echo esc_html__('Excluir', 'wa-suit'); ?></button>
+				</div>
+				<div class="wa-code-snippets__toolbar-filters">
+					<div class="wa-code-snippets__tabs" role="group" aria-label="<?php echo esc_attr__('Filtrar por linguagem', 'wa-suit'); ?>">
+						<?php
+						$language_tabs = array_merge(array('all' => __('Todos', 'wa-suit')), $this->languages);
+						foreach ($language_tabs as $language => $label) :
+							$count = 'all' === $language ? $counts['all'] : $counts[$language];
+						?>
+							<button type="button" aria-pressed="<?php echo 'all' === $language ? 'true' : 'false'; ?>" data-wa-language-filter="<?php echo esc_attr($language); ?>">
+								<?php echo esc_html($label); ?> <span data-wa-language-count="<?php echo esc_attr($language); ?>"><?php echo esc_html(number_format_i18n($count)); ?></span>
+							</button>
+						<?php endforeach; ?>
+					</div>
+					<div class="wa-code-snippets__status-tabs" role="group" aria-label="<?php echo esc_attr__('Filtrar por status', 'wa-suit'); ?>">
+						<button type="button" aria-pressed="false" data-wa-status-filter="active" title="<?php echo esc_attr__('Ativos', 'wa-suit'); ?>">ON <span data-wa-status-count="active"><?php echo esc_html(number_format_i18n($counts['active'])); ?></span></button>
+						<button type="button" aria-pressed="false" data-wa-status-filter="inactive" title="<?php echo esc_attr__('Desativados', 'wa-suit'); ?>">OFF <span data-wa-status-count="inactive"><?php echo esc_html(number_format_i18n($counts['inactive'])); ?></span></button>
+						<button type="button" aria-pressed="false" data-wa-status-filter="trash" title="<?php echo esc_attr__('Lixeira', 'wa-suit'); ?>"><?php echo esc_html__('Lixeira', 'wa-suit'); ?> <span data-wa-status-count="trash"><?php echo esc_html(number_format_i18n($counts['trash'])); ?></span></button>
 					</div>
 				</div>
-				<div class="wa-code-snippets__tabs" role="group" aria-label="<?php echo esc_attr__('Filtrar por linguagem', 'wa-suit'); ?>">
-					<?php
-					$language_tabs = array_merge(array('all' => __('Todos', 'wa-suit')), $this->languages);
-					foreach ($language_tabs as $language => $label) :
-						$count = 'all' === $language ? $counts['all'] : $counts[$language];
-					?>
-						<button type="button" aria-pressed="<?php echo 'all' === $language ? 'true' : 'false'; ?>" data-wa-language-filter="<?php echo esc_attr($language); ?>">
-							<?php echo esc_html($label); ?> <span data-wa-language-count="<?php echo esc_attr($language); ?>"><?php echo esc_html(number_format_i18n($count)); ?></span>
-						</button>
-					<?php endforeach; ?>
-				</div>
-				<div class="wa-code-snippets__status-tabs" role="group" aria-label="<?php echo esc_attr__('Filtrar por status', 'wa-suit'); ?>">
-					<button type="button" aria-pressed="false" data-wa-status-filter="active" title="<?php echo esc_attr__('Ativos', 'wa-suit'); ?>">ON <span data-wa-status-count="active"><?php echo esc_html(number_format_i18n($counts['active'])); ?></span></button>
-					<button type="button" aria-pressed="false" data-wa-status-filter="inactive" title="<?php echo esc_attr__('Desativados', 'wa-suit'); ?>">OFF <span data-wa-status-count="inactive"><?php echo esc_html(number_format_i18n($counts['inactive'])); ?></span></button>
-					<button type="button" aria-pressed="false" data-wa-status-filter="trash" title="<?php echo esc_attr__('Lixeira', 'wa-suit'); ?>"><?php echo esc_html__('Lixeira', 'wa-suit'); ?> <span data-wa-status-count="trash"><?php echo esc_html(number_format_i18n($counts['trash'])); ?></span></button>
-				</div>
-				<div class="wa-code-snippets__filters">
+				<div class="wa-code-snippets__toolbar-search">
 					<label class="wa-code-snippets__location-filter">
 						<span class="screen-reader-text"><?php echo esc_html__('Filtrar por localização', 'wa-suit'); ?></span>
 						<select data-wa-snippet-location-filter>
@@ -581,10 +635,6 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 						<input type="search" data-wa-snippet-search placeholder="<?php echo esc_attr__('Pesquisar códigos...', 'wa-suit'); ?>">
 					</label>
 				</div>
-				<button type="button" class="wa-admin-btn wa-admin-btn--primary wa-code-snippets__add" data-wa-snippet-add title="<?php echo esc_attr__('Adicionar código', 'wa-suit'); ?>" aria-label="<?php echo esc_attr__('Adicionar código', 'wa-suit'); ?>">
-					<span class="dashicons dashicons-plus" aria-hidden="true"></span>
-					<?php echo esc_html__('Adicionar código', 'wa-suit'); ?>
-				</button>
 			</div>
 			<div class="wa-code-snippets__confirm" data-wa-bulk-dialog role="dialog" aria-modal="true" aria-labelledby="wa-code-snippets-confirm-title" hidden>
 				<button type="button" class="wa-code-snippets__confirm-backdrop" data-wa-bulk-dialog-cancel aria-label="<?php echo esc_attr__('Fechar confirmação', 'wa-suit'); ?>"></button>
@@ -634,7 +684,7 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 			</form>
 
 			<div class="wa-code-snippets__help">
-				<p><?php echo esc_html__('HTML, CSS, JavaScript e o resultado de shortcodes são enviados ao navegador. Selecione PHP para códigos PHP: eles são executados antes do template e também em requisições AJAX iniciadas no site público, para que filtros e validações funcionem. A saída direta do PHP aparece na posição escolhida. PHP executa no servidor para todos os visitantes que correspondam à regra escolhida, com acesso às funções do WordPress, e não pode ser limitado por dispositivo. Use apenas código confiável e mantenha um backup.', 'wa-suit'); ?></p>
+				<p><?php echo esc_html__('HTML, CSS, JavaScript e o resultado de shortcodes são enviados ao navegador. Selecione PHP para códigos PHP: eles são executados antes do template e também em requisições AJAX iniciadas no site público, para que filtros e validações funcionem. A saída direta do PHP aparece na posição escolhida. Se uma função global já existir, o código será desativado por segurança e um aviso será exibido no painel. Tags PHP e cercas Markdown de código são aceitas. PHP executa no servidor para todos os visitantes que correspondam à regra escolhida, com acesso às funções do WordPress, e não pode ser limitado por dispositivo. Use apenas código confiável e mantenha um backup.', 'wa-suit'); ?></p>
 				<p><?php echo esc_html__('Quando mais de uma regra corresponder, a regra de URL mais específica tem prioridade; sem correspondência de URL, o tipo de página selecionado tem prioridade sobre “Site inteiro”. Regras igualmente específicas podem ser exibidas juntas. Códigos marcados como somente shortcode só aparecem onde o shortcode gerado for usado.', 'wa-suit'); ?></p>
 			</div>
 
@@ -813,7 +863,11 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 				continue;
 			}
 
-			$this->php_output[$id] = $this->evaluate_php_snippet($id, isset($snippet['code']) ? $snippet['code'] : '');
+			$this->php_output[$id] = $this->evaluate_php_snippet(
+				$id,
+				isset($snippet['code']) ? $snippet['code'] : '',
+				isset($snippet['title']) && is_string($snippet['title']) ? $snippet['title'] : $id
+			);
 		}
 	}
 
@@ -927,7 +981,11 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 				break;
 			case 'php':
 				if (! empty($snippet['shortcode_only'])) {
-					$output = $this->evaluate_php_snippet($id, $code);
+					$output = $this->evaluate_php_snippet(
+						$id,
+						$code,
+						isset($snippet['title']) && is_string($snippet['title']) ? $snippet['title'] : $id
+					);
 				} else {
 					$output = isset($this->php_output[$id]) ? $this->php_output[$id] : '';
 				}
@@ -1069,20 +1127,39 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 	 * @param string $code PHP statements.
 	 * @return string
 	 */
-	private function evaluate_php_snippet($id, $code)
+	private function evaluate_php_snippet($id, $code, $title = '')
 	{
+		if (array_key_exists($id, $this->php_execution_results)) {
+			return $this->php_execution_results[$id];
+		}
+
+		$normalized_code = $this->normalize_php_code($code);
+		$conflict = $this->find_declared_function_conflict($normalized_code);
+		if ('' !== $conflict) {
+			$this->disable_conflicting_snippet($id, $conflict);
+			$this->php_execution_results[$id] = '';
+			return $this->php_execution_results[$id];
+		}
+
 		$buffer_level = ob_get_level();
 		ob_start();
+		$has_previous_context = array_key_exists('wa_suit_current_php_snippet', $GLOBALS);
+		$previous_context = $has_previous_context ? $GLOBALS['wa_suit_current_php_snippet'] : null;
+		$GLOBALS['wa_suit_current_php_snippet'] = array(
+			'id'    => sanitize_key($id),
+			'title' => sanitize_text_field($title),
+		);
 
 		try {
-			$this->run_php_code($this->normalize_php_code($code));
+			$this->run_php_code($normalized_code);
 			$output = ob_get_clean();
-			return is_string($output) ? $output : '';
+			$this->php_execution_results[$id] = is_string($output) ? $output : '';
 		} catch (Throwable $error) {
 			while (ob_get_level() > $buffer_level) {
 				ob_end_clean();
 			}
 
+			WA_Suit_Debug::handle_snippet_failure($id, $title, $error->getMessage());
 			error_log(
 				sprintf(
 					'WA Suit PHP snippet "%s" failed: %s',
@@ -1090,8 +1167,198 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 					$error->getMessage()
 				)
 			);
-			return '';
+			$this->php_execution_results[$id] = '';
+		} finally {
+			if ($has_previous_context) {
+				$GLOBALS['wa_suit_current_php_snippet'] = $previous_context;
+			} else {
+				unset($GLOBALS['wa_suit_current_php_snippet']);
+			}
 		}
+
+		return $this->php_execution_results[$id];
+	}
+
+	/**
+	 * Finds global named functions that already exist or are repeated in this snippet.
+	 *
+	 * @param string $code Normalized PHP code.
+	 * @return string
+	 */
+	private function find_declared_function_conflict($code)
+	{
+		$tokens = token_get_all('<?php ' . $code);
+		$declared = array();
+		$class_depths = array();
+		$brace_depth = 0;
+		$pending_class = false;
+		$previous_significant_token = null;
+		$token_count = count($tokens);
+
+		for ($index = 0; $index < $token_count; $index++) {
+			$token = $tokens[$index];
+			$token_id = is_array($token) ? $token[0] : null;
+			$token_text = is_array($token) ? $token[1] : $token;
+
+			if (is_array($token) && in_array($token_id, array(T_WHITESPACE, T_COMMENT, T_DOC_COMMENT), true)) {
+				continue;
+			}
+
+			$class_tokens = array(T_CLASS, T_INTERFACE, T_TRAIT);
+			if (defined('T_ENUM')) {
+				$class_tokens[] = constant('T_ENUM');
+			}
+
+			if (
+				is_array($token) &&
+				in_array($token_id, $class_tokens, true) &&
+				(! is_array($previous_significant_token) || T_DOUBLE_COLON !== $previous_significant_token[0])
+			) {
+				$pending_class = true;
+			}
+
+			if (is_array($token) && T_FUNCTION === $token_id && empty($class_depths)) {
+				$name_index = $index + 1;
+				while ($name_index < $token_count) {
+					$name_token = $tokens[$name_index];
+					if (is_array($name_token) && in_array($name_token[0], array(T_WHITESPACE, T_COMMENT, T_DOC_COMMENT), true)) {
+						$name_index++;
+						continue;
+					}
+					if ('&' === (is_array($name_token) ? $name_token[1] : $name_token)) {
+						$name_index++;
+						continue;
+					}
+					break;
+				}
+
+				if ($name_index < $token_count && is_array($tokens[$name_index]) && T_STRING === $tokens[$name_index][0]) {
+					$function_name = $tokens[$name_index][1];
+					$function_key = strtolower($function_name);
+					if (isset($declared[$function_key]) || function_exists($function_name)) {
+						return $function_name;
+					}
+					$declared[$function_key] = true;
+				}
+			}
+
+			if ('{' === $token_text) {
+				$brace_depth++;
+				if ($pending_class) {
+					$class_depths[] = $brace_depth;
+					$pending_class = false;
+				}
+			} elseif ('}' === $token_text) {
+				if (! empty($class_depths) && end($class_depths) === $brace_depth) {
+					array_pop($class_depths);
+				}
+				$brace_depth = max(0, $brace_depth - 1);
+			}
+
+			$previous_significant_token = $token;
+		}
+
+		return '';
+	}
+
+	/**
+	 * Disables a conflicting snippet and queues an administrator warning.
+	 *
+	 * @param string $id            Snippet identifier.
+	 * @param string $function_name Conflicting function name.
+	 * @return void
+	 */
+	private function disable_conflicting_snippet($id, $function_name)
+	{
+		$settings = $this->get_settings();
+		$snippets = isset($settings['snippets']) && is_array($settings['snippets']) ? $settings['snippets'] : array();
+		if (! isset($snippets[$id]) || ! is_array($snippets[$id])) {
+			return;
+		}
+
+		$snippets[$id]['enabled'] = '0';
+		$this->update_settings(array('snippets' => $snippets));
+
+		$notices = get_option('wa_suit_code_snippet_conflict_notices', array());
+		if (! is_array($notices)) {
+			$notices = array();
+		}
+
+		$title = isset($snippets[$id]['title']) && is_string($snippets[$id]['title'])
+			? $snippets[$id]['title']
+			: $id;
+		$notice_key = md5($id . '|' . $function_name);
+
+		foreach ($notices as $notice) {
+			if (is_array($notice) && isset($notice['key']) && $notice_key === $notice['key']) {
+				return;
+			}
+		}
+
+		$notices[] = array(
+			'key'      => $notice_key,
+			'title'    => $title,
+			'function' => $function_name,
+		);
+		update_option('wa_suit_code_snippet_conflict_notices', array_slice($notices, -10), false);
+	}
+
+	/**
+	 * Displays and clears queued PHP function conflict warnings.
+	 *
+	 * @return void
+	 */
+	public function render_php_conflict_notices()
+	{
+		if (! WA_Suit_Security::can_manage_settings()) {
+			return;
+		}
+
+		$notices = get_option('wa_suit_code_snippet_conflict_notices', array());
+		if (is_array($notices)) {
+			foreach ($notices as $notice) {
+				if (! is_array($notice) || ! isset($notice['title'], $notice['function'])) {
+					continue;
+				}
+
+				printf(
+					'<div class="notice notice-warning is-dismissible"><p>%s</p></div>',
+					esc_html(
+						sprintf(
+							__('Por segurança, o código “%1$s” foi desativado porque a função PHP “%2$s” já está declarada. Isso costuma acontecer quando o mesmo código também está ativo em outro plugin, como o WPCode. Desative a cópia duplicada antes de reativar este código.', 'wa-suit'),
+							$notice['title'],
+							$notice['function']
+						)
+					)
+				);
+			}
+		}
+
+		delete_option('wa_suit_code_snippet_conflict_notices');
+
+		$failure_notices = get_option('wa_suit_php_snippet_failure_notices', array());
+		if (! is_array($failure_notices) || empty($failure_notices)) {
+			return;
+		}
+
+		foreach ($failure_notices as $notice) {
+			if (! is_array($notice) || ! isset($notice['title'], $notice['message'])) {
+				continue;
+			}
+
+			printf(
+				'<div class="notice notice-error is-dismissible"><p>%s</p></div>',
+				esc_html(
+					sprintf(
+						__('O código PHP “%1$s” foi desativado após uma falha: %2$s', 'wa-suit'),
+						$notice['title'],
+						$notice['message']
+					)
+				)
+			);
+		}
+
+		delete_option('wa_suit_php_snippet_failure_notices');
 	}
 
 	/**
@@ -1102,10 +1369,32 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 	 */
 	private function normalize_php_code($code)
 	{
+		$code = trim($code);
+		if (preg_match('/\A```(?:php)?[ \t]*\R(.*)\R```[ \t]*\z/is', $code, $matches)) {
+			$code = $matches[1];
+		}
+
 		$code = preg_replace('/\A(?:\xEF\xBB\xBF)?\s*<\?php\b/i', '', $code, 1);
 		$code = preg_replace('/\?>\s*\z/', '', $code, 1);
 
 		return is_string($code) ? trim($code) : '';
+	}
+
+	/**
+	 * Checks PHP syntax without executing the snippet.
+	 *
+	 * @param string $code PHP code.
+	 * @return string Empty when syntax is valid, otherwise the parser message.
+	 */
+	private function get_php_syntax_error($code)
+	{
+		try {
+			token_get_all('<?php ' . $this->normalize_php_code($code), TOKEN_PARSE);
+		} catch (ParseError $error) {
+			return $error->getMessage();
+		}
+
+		return '';
 	}
 
 	/**
@@ -1208,6 +1497,19 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 		if (! is_array($snippet['devices']) || empty($snippet['devices'])) {
 			$snippet['devices'] = array('all');
 		}
+		$created_by_name = isset($snippet['created_by_name']) && is_string($snippet['created_by_name'])
+			? $snippet['created_by_name']
+			: '';
+		$created_by_id = isset($snippet['created_by_id']) ? absint($snippet['created_by_id']) : 0;
+		if ($created_by_id) {
+			$creator = get_userdata($created_by_id);
+			if ($creator instanceof WP_User) {
+				$created_by_name = $creator->display_name;
+			}
+		}
+		$created_at = isset($snippet['created_at']) && is_string($snippet['created_at'])
+			? $snippet['created_at']
+			: '';
 		$prefix  = 'snippets[' . $key . ']';
 		$is_trashed = ! empty($snippet['trashed']);
 		$duplicate_url = '__SNIPPET_KEY__' !== $key && ! $is_trashed
@@ -1287,6 +1589,22 @@ class WA_Suit_Module_Code_Snippets extends WA_Suit_Module_Base
 				</span>
 			</summary>
 			<div class="wa-code-snippet__content">
+				<?php if ('__SNIPPET_KEY__' !== $key) : ?>
+					<p class="wa-code-snippet__metadata">
+						<?php
+						if ('' !== $created_at) {
+							printf(
+								/* translators: 1: creator name, 2: creation date and time. */
+								esc_html__('Criado por %1$s em %2$s', 'wa-suit'),
+								esc_html('' !== $created_by_name ? $created_by_name : __('Usuário removido', 'wa-suit')),
+								esc_html(mysql2date(get_option('date_format') . ' ' . get_option('time_format'), $created_at, false))
+							);
+						} else {
+							echo esc_html__('Autor e data serão registrados ao salvar este código.', 'wa-suit');
+						}
+						?>
+					</p>
+				<?php endif; ?>
 				<div class="wa-code-snippet__grid">
 					<label>
 						<span><?php echo esc_html__('Nome', 'wa-suit'); ?></span>
